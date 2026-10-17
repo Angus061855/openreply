@@ -3,6 +3,7 @@ import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import os from "node:os";
+import { refreshTokensAndUsage } from "@/lib/ops/refresh-tokens";
 
 const worker = createDMWorker();
 const startedAt = new Date().toISOString();
@@ -48,10 +49,23 @@ async function poll() {
 setTimeout(() => void poll(), 10_000);
 const pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
 
+// This self-hosted deployment does not rely on Vercel cron.
+async function maintainTokens() {
+  try {
+    const result = await refreshTokensAndUsage();
+    console.log("[DM Worker] Token maintenance:", { processed: result.totalProcessed, failed: result.results.filter(r => r.status === "failed").length });
+  } catch {
+    console.error("[DM Worker] Token maintenance failed; inspect service diagnostics");
+  }
+}
+void maintainTokens();
+const maintenanceTimer = setInterval(() => void maintainTokens(), 24 * 60 * 60_000);
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
+  clearInterval(maintenanceTimer);
   await worker.close();
   process.exit(0);
 }
